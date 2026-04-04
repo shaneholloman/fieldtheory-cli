@@ -185,7 +185,7 @@ export function buildCli() {
   program
     .name('ft')
     .description('Self-custody for your X/Twitter bookmarks. Sync, search, classify, and explore locally.')
-    .version('1.0.1')
+    .version('1.1.0')
     .showHelpAfterError()
     .hook('preAction', () => {
       console.log(LOGO);
