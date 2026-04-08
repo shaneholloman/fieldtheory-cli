@@ -156,16 +156,23 @@ async function queryVizData(): Promise<VizData> {
        GROUP BY author_handle ORDER BY c DESC LIMIT 20`
     );
 
-    // Twitter date format: "Sat Mar 28 18:55:23 +0000 2026"
-    // Year is at end (-4), month name at 5-7, hour at 12-13
+    // Twitter legacy format: "Sat Mar 28 18:55:23 +0000 2026"
+    // Normalize both legacy and ISO timestamps into the same YYYY-MM bucket.
+    const legacyMonthNumberExpr = `CASE substr(bookmarked_at, 5, 3)
+      WHEN 'Jan' THEN '01' WHEN 'Feb' THEN '02' WHEN 'Mar' THEN '03'
+      WHEN 'Apr' THEN '04' WHEN 'May' THEN '05' WHEN 'Jun' THEN '06'
+      WHEN 'Jul' THEN '07' WHEN 'Aug' THEN '08' WHEN 'Sep' THEN '09'
+      WHEN 'Oct' THEN '10' WHEN 'Nov' THEN '11' WHEN 'Dec' THEN '12'
+      ELSE '00'
+    END`;
+    const monthBucketExpr = `CASE
+      WHEN bookmarked_at GLOB '____-__-__*' THEN substr(bookmarked_at, 1, 7)
+      ELSE substr(bookmarked_at, -4) || '-' || ${legacyMonthNumberExpr}
+    END`;
 
-    // Build a synthetic YYYY-MonName from the twitter date parts or YYYY-MM from ISO
     const monthlyRows = db.exec(
       `SELECT
-         CASE
-           WHEN bookmarked_at GLOB '____-__-__*' THEN substr(bookmarked_at, 1, 7)
-           ELSE substr(bookmarked_at, -4) || '-' || substr(bookmarked_at, 5, 3)
-         END as ym,
+         ${monthBucketExpr} as ym,
          COUNT(*) as c
        FROM bookmarks WHERE bookmarked_at IS NOT NULL
        GROUP BY ym ORDER BY ym`
@@ -281,7 +288,7 @@ async function queryVizData(): Promise<VizData> {
 
     // Rising voices: authors with 3+ bookmarks, all from the most recent month
     const latestMonth = db.exec(
-      `SELECT substr(bookmarked_at, -4) || '-' || substr(bookmarked_at, 5, 3)
+      `SELECT ${monthBucketExpr}
        FROM bookmarks WHERE bookmarked_at IS NOT NULL
        ORDER BY bookmarked_at DESC LIMIT 1`
     )[0]?.values[0]?.[0] as string | undefined;
@@ -293,7 +300,7 @@ async function queryVizData(): Promise<VizData> {
          WHERE author_handle IS NOT NULL
          GROUP BY author_handle
          HAVING c >= 3
-         AND MIN(substr(bookmarked_at, -4) || '-' || substr(bookmarked_at, 5, 3)) = ?
+         AND MIN(${monthBucketExpr}) = ?
          ORDER BY c DESC LIMIT 8`,
         [latestMonth]
       );
@@ -303,47 +310,16 @@ async function queryVizData(): Promise<VizData> {
       }));
     }
 
-    // Convert "2026-Mar" or "2026-03" to "2026-03" for proper sorting
-    const monthNumMap: Record<string, string> = {
-      Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06',
-      Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12',
+    const monthNameMap: Record<string, string> = {
+      '01': 'Jan', '02': 'Feb', '03': 'Mar', '04': 'Apr', '05': 'May', '06': 'Jun',
+      '07': 'Jul', '08': 'Aug', '09': 'Sep', '10': 'Oct', '11': 'Nov', '12': 'Dec',
     };
-    const revMonthMap: Record<string, string> = Object.fromEntries(
-      Object.entries(monthNumMap).map(([k, v]) => [v, k])
-    );
-
-    const monthMap = new Map<string, { month: string; label: string; count: number }>();
-
-    for (const r of monthlyRows[0]?.values ?? []) {
-      const raw = r[0] as string; // "2026-Mar" or "2026-03"
-      const [part1, part2] = raw.split('-');
-      
-      let year = part1;
-      let monthKey = '';
-      let label = '';
-      
-      const numFromLegacy = monthNumMap[part2];
-      if (numFromLegacy) {
-        // Legacy format: YYYY-MonName
-        monthKey = `${year}-${numFromLegacy}`;
-        label = `${part2} ${year}`;
-      } else {
-        // ISO format: YYYY-MM
-        monthKey = `${year}-${part2}`;
-        const nameFromISO = revMonthMap[part2] ?? part2;
-        label = `${nameFromISO} ${year}`;
-      }
-
-      const existing = monthMap.get(monthKey);
-      if (existing) {
-        existing.count += r[1] as number;
-      } else {
-        monthMap.set(monthKey, { month: monthKey, label, count: r[1] as number });
-      }
-    }
-
-    const rawMonthly = Array.from(monthMap.values());
-    rawMonthly.sort((a, b) => a.month.localeCompare(b.month));
+    const rawMonthly = (monthlyRows[0]?.values ?? []).map((r) => {
+      const month = r[0] as string; // "2026-03"
+      const [year, monthNum] = month.split('-');
+      const label = `${monthNameMap[monthNum] ?? monthNum} ${year}`;
+      return { month, label, count: r[1] as number };
+    });
 
     // Categories
     let categories: { name: string; count: number }[] = [];
