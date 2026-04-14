@@ -35,6 +35,10 @@ const MIN_DOMAIN_COUNT   = 5;
 const MIN_ENTITY_COUNT   = 10;
 const MAX_SAMPLE_SIZE    = 50;
 
+/** Abort the compile after this many consecutive page failures — catches
+ * auth expiry and rate-limit cascades before they waste hours. */
+export const MAX_CONSECUTIVE_FAILURES = 5;
+
 /** Scale timeout by sample count — large categories need more time. */
 function llmOpts(sampleCount: number) {
   // Base 120s + 2s per bookmark sampled, capped at 10 min
@@ -52,6 +56,7 @@ export interface MdState {
 export interface CompileOptions {
   full?: boolean;
   only?: string[];
+  engineOverride?: string;
   onProgress?: (status: string) => void;
 }
 
@@ -63,6 +68,7 @@ export interface CompileResult {
   pagesFailed: number;
   totalPages: number;
   elapsed: number;
+  aborted: boolean;
 }
 
 function sha256(text: string): string {
@@ -243,7 +249,7 @@ export async function compileMd(options: CompileOptions = {}): Promise<CompileRe
     let alive = false;
     try { process.kill(Number(existingPid), 0); alive = true; } catch { /* not running */ }
     if (alive) {
-      throw new Error(`Another ft md is already running (pid ${existingPid}). Wait for it to finish or remove ${lockPath}`);
+      throw new Error(`Another ft wiki is already running (pid ${existingPid}). Wait for it to finish or remove ${lockPath}`);
     }
     // Stale lock from a crashed run — take over
     fs.writeFileSync(lockPath, String(process.pid));
@@ -262,7 +268,8 @@ async function doCompile(
   startTime: number,
   onlySet: Set<string> | null,
 ): Promise<CompileResult> {
-  const engine = await resolveEngine();
+  const engine = await resolveEngine({ override: options.engineOverride });
+  progress(`Using ${engine.name}`);
 
   progress('Initializing md directories...');
   await ensureDir(mdDir());
@@ -280,6 +287,7 @@ async function doCompile(
   let pagesUpdated = 0;
   let pagesSkipped = 0;
   let pagesFailed  = 0;
+  let aborted      = false;
 
   const db = await openBookmarksDb();
 
@@ -347,6 +355,8 @@ async function doCompile(
     }
 
     // ── Generate each page ───────────────────────────────────────────────
+    let consecutiveFailures = 0;
+    let firstFailureMsg = '';
     for (let i = 0; i < toGenerate.length; i++) {
       const item = toGenerate[i];
       const tag = `[${i + 1}/${toGenerate.length}]`;
@@ -376,6 +386,16 @@ async function doCompile(
         const isTimeout = msg.includes('ETIMEDOUT') || msg.includes('timed out');
         await logLine(`${tag} ${item.key} — ${isTimeout ? 'TIMEOUT' : 'ERROR'}: ${msg.slice(0, 120)}`);
         pagesFailed++;
+        consecutiveFailures++;
+        if (!firstFailureMsg) firstFailureMsg = msg;
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          aborted = true;
+          await logLine(
+            `Aborted after ${MAX_CONSECUTIVE_FAILURES} consecutive failures — first error: ${firstFailureMsg.slice(0, 200)}`,
+          );
+          await logLine(`Check that \`${engine.name}\` is authenticated and not rate-limited, then rerun \`ft wiki\`.`);
+          break;
+        }
         continue;
       }
 
@@ -394,6 +414,7 @@ async function doCompile(
       await writeJson(mdStatePath(), state);
 
       await logLine(`${tag} ${item.key} → ${outcome}`);
+      consecutiveFailures = 0;
     }
   } finally {
     db.close();
@@ -409,7 +430,7 @@ async function doCompile(
   const totalPages = pagesCreated + pagesUpdated;
   await appendLine(
     mdLogPath(),
-    logEntry('compile', `engine=${engine.name} created=${pagesCreated} updated=${pagesUpdated} skipped=${pagesSkipped} failed=${pagesFailed} elapsed=${elapsed}s`),
+    logEntry('compile', `${aborted ? 'aborted ' : ''}engine=${engine.name} created=${pagesCreated} updated=${pagesUpdated} skipped=${pagesSkipped} failed=${pagesFailed} elapsed=${elapsed}s`),
   );
 
   // ── Save state ───────────────────────────────────────────────────────────
@@ -417,5 +438,5 @@ async function doCompile(
   state.totalCompiles  = (state.totalCompiles ?? 0) + 1;
   await writeJson(mdStatePath(), state);
 
-  return { engine: engine.name, pagesCreated, pagesUpdated, pagesSkipped, pagesFailed, totalPages, elapsed };
+  return { engine: engine.name, pagesCreated, pagesUpdated, pagesSkipped, pagesFailed, totalPages, elapsed, aborted };
 }

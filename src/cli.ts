@@ -1237,9 +1237,10 @@ export function buildCli() {
 
   program
     .command('wiki')
-    .description('Compile Karpathy-style markdown wiki from bookmarks')
+    .description('Compile Karpathy-style markdown wiki from bookmarks (requires claude or codex CLI on PATH)')
     .option('--full', 'Recompile all pages (ignore incremental cache)')
     .option('--clean', 'Strip leftover LLM code fences from existing wiki pages (no compile)')
+    .addOption(engineOption())
     .action(safe(async (options) => {
       if (!requireIndex()) return;
 
@@ -1268,13 +1269,20 @@ export function buildCli() {
       try {
         const result = await compileMd({
           full: options.full,
+          engineOverride: options.engine ? String(options.engine) : undefined,
           onProgress: (s) => process.stderr.write(s + '\n'),
         });
         const elapsed = ((Date.now() - start) / 1000).toFixed(1);
         const failed = result.pagesFailed > 0 ? ` failed=${result.pagesFailed}` : '';
-        console.log(`Done (${elapsed}s) — engine=${result.engine} created=${result.pagesCreated} updated=${result.pagesUpdated} skipped=${result.pagesSkipped}${failed} total=${result.totalPages}`);
-        if (result.pagesFailed > 0) {
-          console.log(`\n  ${result.pagesFailed} page(s) failed — re-run ft wiki to retry them.`);
+        if (result.aborted) {
+          console.log(`Aborted (${elapsed}s) — engine=${result.engine} created=${result.pagesCreated} updated=${result.pagesUpdated}${failed}`);
+          console.log(`\n  Too many consecutive failures. Check that \`${result.engine}\` is authenticated and not rate-limited, then rerun \`ft wiki\`.`);
+          process.exitCode = 1;
+        } else {
+          console.log(`Done (${elapsed}s) — engine=${result.engine} created=${result.pagesCreated} updated=${result.pagesUpdated} skipped=${result.pagesSkipped}${failed} total=${result.totalPages}`);
+          if (result.pagesFailed > 0) {
+            console.log(`\n  ${result.pagesFailed} page(s) failed — re-run ft wiki to retry them.`);
+          }
         }
         console.log(`\n  Open in your markdown viewer:\n  ${mdDir()}`);
       } finally {
