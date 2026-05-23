@@ -125,7 +125,7 @@ const SPINNER = ['\u280b', '\u2819', '\u2839', '\u2838', '\u283c', '\u2834', '\u
 let spinnerIdx = 0;
 
 /** Creates a spinner that animates independently of data callbacks. */
-function createSpinner(renderLine: () => string): { update: () => void; stop: () => void } {
+function createSpinner(renderLine: () => string, options: { onSigint?: () => void } = {}): { update: () => void; stop: () => void } {
   let line = '';
   let stopped = false;
   const tick = () => {
@@ -144,6 +144,10 @@ function createSpinner(renderLine: () => string): { update: () => void; stop: ()
   // Graceful interrupt — stop spinner, show friendly message
   const onSigint = () => {
     stop();
+    if (options.onSigint) {
+      options.onSigint();
+      return;
+    }
     console.log('\n  Interrupted. Your data is safe \u2014 progress has been saved.');
     console.log('  Run the same command again to pick up where you left off.\n');
     process.exit(0);
@@ -175,6 +179,7 @@ const FRIENDLY_STOP_REASONS: Record<string, string> = {
   'max pages reached': 'Paused after reaching page limit. Run again to continue.',
   'rate limited': 'Paused by X rate limiting.',
   'target additions reached': 'Reached target bookmark count.',
+  'interrupted': 'Interrupted by user.',
 };
 
 function friendlyStopReason(raw?: string): string {
@@ -205,8 +210,9 @@ function printMediaFetchSummary(result: MediaFetchManifest): void {
   console.log(`  ✓ Manifest: ${bookmarkMediaManifestPath()}`);
 }
 
-async function runMediaFetchWithProgress(options: { limit?: number; maxBytes?: number; skipProfileImages?: boolean } = {}): Promise<MediaFetchManifest> {
+async function runMediaFetchWithProgress(options: { limit?: number; maxBytes?: number; skipProfileImages?: boolean; retryFailed?: boolean } = {}): Promise<MediaFetchManifest> {
   const startTime = Date.now();
+  const controller = new AbortController();
   let lastMedia: MediaFetchProgress = {
     candidateBookmarks: 0,
     processed: 0,
@@ -217,11 +223,18 @@ async function runMediaFetchWithProgress(options: { limit?: number; maxBytes?: n
   const spinner = createSpinner(() => {
     const elapsed = Math.round((Date.now() - startTime) / 1000);
     return `Fetching media...  ${lastMedia.processed} processed  │  ${lastMedia.downloaded} downloaded  │  ${elapsed}s`;
+  }, {
+    onSigint: () => {
+      controller.abort();
+      console.log('\n  Interrupted. Saving media progress...\n');
+    },
   });
   const result = await runWithSpinner(spinner, () => fetchBookmarkMediaBatch({
     limit: options.limit,
     maxBytes: options.maxBytes,
     skipProfileImages: options.skipProfileImages,
+    retryFailed: options.retryFailed,
+    signal: controller.signal,
     onProgress: (progress: MediaFetchProgress) => {
       lastMedia = progress;
       spinner.update();
@@ -229,6 +242,9 @@ async function runMediaFetchWithProgress(options: { limit?: number; maxBytes?: n
   }));
   console.log('');
   printMediaFetchSummary(result);
+  if (controller.signal.aborted) {
+    console.log('  Interrupted. Progress has been saved; run the same command again to continue.\n');
+  }
   return result;
 }
 
@@ -919,6 +935,7 @@ export function buildCli() {
           }
         } else {
           const startTime = Date.now();
+          const controller = new AbortController();
           let lastSync: SyncProgress = { page: 0, totalFetched: 0, newAdded: 0, running: true, done: false };
           const spinner = createSpinner(() => {
             const elapsed = Math.round((Date.now() - startTime) / 1000);
@@ -926,6 +943,11 @@ export function buildCli() {
               return `${lastSync.stopReason}  \u2502  ${lastSync.newAdded} new  \u2502  ${elapsed}s`;
             }
             return `Syncing bookmarks...  ${lastSync.newAdded} new  \u2502  page ${lastSync.page}  \u2502  ${elapsed}s`;
+          }, {
+            onSigint: () => {
+              controller.abort();
+              console.log('\n  Interrupted. Saving sync progress...\n');
+            },
           });
           const { csrfToken, cookieHeader } = parseCookieOption(options.cookies);
 
@@ -963,6 +985,7 @@ export function buildCli() {
             chromeUserDataDir: options.chromeUserDataDir ? String(options.chromeUserDataDir) : undefined,
             chromeProfileDirectory: options.chromeProfileDirectory ? String(options.chromeProfileDirectory) : undefined,
             firefoxProfileDir: options.firefoxProfileDir ? String(options.firefoxProfileDir) : undefined,
+            signal: controller.signal,
             onProgress: (status: SyncProgress) => {
               lastSync = status;
               spinner.update();
@@ -986,6 +1009,11 @@ export function buildCli() {
             console.log(`  ${result.bookmarkedAtMissing} bookmarks missing a reliable bookmark date`);
           }
           console.log(`  \u2713 Data: ${dataDir()}\n`);
+
+          if (result.stopReason === 'interrupted') {
+            console.log('  Interrupted. Progress has been saved; run ft sync --continue to resume.\n');
+            return;
+          }
 
           warnIfEmpty(result.totalBookmarks);
 
@@ -1534,6 +1562,7 @@ export function buildCli() {
     .option('--limit <n>', 'Max pending bookmarks to process (default: all)', (v: string) => Number(v))
     .option('--max-bytes <n>', 'Per-asset byte limit (default: 200 MB)', (v: string) => Number(v), DEFAULT_MEDIA_MAX_BYTES)
     .option('--skip-profile-images', 'Skip downloading author profile images')
+    .option('--retry-failed', 'Retry failed media entries without waiting for backoff')
     .action(safe(async (options) => {
       if (!requireData()) return;
       await runMediaFetchWithProgress({
@@ -1542,6 +1571,7 @@ export function buildCli() {
           ? options.maxBytes
           : DEFAULT_MEDIA_MAX_BYTES,
         skipProfileImages: Boolean(options.skipProfileImages),
+        retryFailed: Boolean(options.retryFailed),
       });
     }));
 
