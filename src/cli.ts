@@ -39,6 +39,7 @@ import { skillWithFrontmatter, installSkill, uninstallSkill } from './skill.js';
 import { registerCompanionCommands } from './companion-cli.js';
 import { getPathReport } from './field-status.js';
 import { formatAgentContext, getAgentContext } from './agent-context.js';
+import { formatCurrentDocumentContext, readCurrentDocumentContext } from './current.js';
 import { formatWorkflowState, getWorkflowState } from './workflow-state.js';
 import {
   formatIdeasIntro,
@@ -446,7 +447,7 @@ function isInternalWorkerCommand(command: Command): boolean {
 function shouldSkipCommandChrome(command: Command): boolean {
   if (isInternalWorkerCommand(command)) return true;
   if (command.opts().json) return true;
-  if (command.name() === 'path' || command.name() === 'paths' || command.name() === 'recent' || command.name() === 'state') return true;
+  if (command.name() === 'path' || command.name() === 'paths' || command.name() === 'current' || command.name() === 'recent' || command.name() === 'state') return true;
   if (command.name() === 'show' && command.parent?.name() === 'skill') return true;
   return false;
 }
@@ -1533,6 +1534,25 @@ export function buildCli() {
         return;
       }
       process.stdout.write(formatAgentContext(context));
+    }));
+
+  program
+    .command('current')
+    .description('Show the active Field Theory document attached to the Mac app terminal')
+    .option('--manifest <path>', 'Read a specific context manifest')
+    .option('--content-only', 'Print only the active document markdown/content')
+    .option('--json', 'JSON output')
+    .action(safe(async (options) => {
+      const context = readCurrentDocumentContext(options.manifest);
+      if (options.json) {
+        printJson(context);
+        return;
+      }
+      if (options.contentOnly) {
+        process.stdout.write(context.content.endsWith('\n') ? context.content : `${context.content}\n`);
+        return;
+      }
+      process.stdout.write(formatCurrentDocumentContext(context));
     }));
 
   program
