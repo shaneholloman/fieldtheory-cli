@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { codexContextSessionsDir } from './paths.js';
 
-export interface CurrentDocumentContext {
+export interface CurrentDocumentSummary {
   manifestPath: string;
   updatedAt: string | null;
   activeDocument: {
@@ -12,6 +12,9 @@ export interface CurrentDocumentContext {
     contentMode: string | null;
     contentPath: string;
   };
+}
+
+export interface CurrentDocumentContext extends CurrentDocumentSummary {
   content: string;
 }
 
@@ -63,7 +66,7 @@ export function findCurrentContextManifest(sessionsDir = codexContextSessionsDir
   return manifests[0] ?? null;
 }
 
-export function readCurrentDocumentContext(manifestPath = findCurrentContextManifest()): CurrentDocumentContext {
+export function readCurrentDocumentSummary(manifestPath = findCurrentContextManifest()): CurrentDocumentSummary {
   if (!manifestPath) {
     throw new Error('No active Field Theory context found. Open a Field Theory document and attach a Codex terminal first.');
   }
@@ -91,7 +94,14 @@ export function readCurrentDocumentContext(manifestPath = findCurrentContextMani
       contentMode: stringField(documentRecord.contentMode),
       contentPath,
     },
-    content: fs.readFileSync(contentPath, 'utf-8'),
+  };
+}
+
+export function readCurrentDocumentContext(manifestPath = findCurrentContextManifest()): CurrentDocumentContext {
+  const summary = readCurrentDocumentSummary(manifestPath);
+  return {
+    ...summary,
+    content: fs.readFileSync(summary.activeDocument.contentPath, 'utf-8'),
   };
 }
 
@@ -113,4 +123,17 @@ export function formatCurrentDocumentContext(context: CurrentDocumentContext): s
   ];
 
   return `${lines.join('\n')}${context.content.endsWith('\n') ? '' : '\n'}`;
+}
+
+export function formatCurrentDocumentSummary(context: CurrentDocumentSummary): string {
+  return [
+    `title: ${context.activeDocument.title ?? '(untitled)'}`,
+    `source: ${context.activeDocument.path ?? '(unknown)'}`,
+    `kind: ${context.activeDocument.kind ?? '(unknown)'}`,
+    `contentMode: ${context.activeDocument.contentMode ?? '(unknown)'}`,
+    `updatedAt: ${context.updatedAt ?? '(unknown)'}`,
+    `manifest: ${context.manifestPath}`,
+    `content: ${context.activeDocument.contentPath}`,
+    '',
+  ].join('\n');
 }

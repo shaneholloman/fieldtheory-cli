@@ -7,7 +7,9 @@ import test from 'node:test';
 import {
   findCurrentContextManifest,
   formatCurrentDocumentContext,
+  formatCurrentDocumentSummary,
   readCurrentDocumentContext,
+  readCurrentDocumentSummary,
 } from '../src/current.js';
 
 function writeContext(root: string, id: string, title: string, content: string, updatedAt: string): string {
@@ -43,11 +45,17 @@ test('readCurrentDocumentContext reads newest Field Theory context manifest', ()
 
     assert.equal(findCurrentContextManifest(sessionsDir), newerManifest);
 
+    const summary = readCurrentDocumentSummary(newerManifest);
+    assert.equal(summary.activeDocument.title, 'Newer Page');
+    assert.equal('content' in summary, false);
+
     const context = readCurrentDocumentContext(newerManifest);
     assert.equal(context.activeDocument.title, 'Newer Page');
     assert.equal(context.content, '# Newer\n');
     assert.match(formatCurrentDocumentContext(context), /title: Newer Page/);
     assert.match(formatCurrentDocumentContext(context), /# Newer/);
+    assert.match(formatCurrentDocumentSummary(context), /title: Newer Page/);
+    assert.doesNotMatch(formatCurrentDocumentSummary(context), /# Newer/);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

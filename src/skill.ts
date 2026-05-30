@@ -35,7 +35,7 @@ Field Theory has three main local surfaces:
 ## Search Workflow
 
 1. Check paths and status when setup matters: \`ft paths --json\`, \`ft status --json\`
-2. When the user asks what Field Theory document they are looking at, run \`ft current --json\`
+2. When the user asks what Field Theory document they are looking at, run \`ft current --json\`; only use \`ft current --content-only\` when the document body is needed
 3. Check repo workflow state when branch/worktree/PR shape matters: \`ft state --json\`
 4. When the user says "that file" or "the recent file", inspect current repo recency with \`ft recent --json\`
 5. Search durable notes first when prior project knowledge matters: \`ft library search <query> --json\`
@@ -60,7 +60,8 @@ Use this shape:
 \`\`\`bash
 ft seeds search "<bookmark topic>" --days 180 --limit 8 --frame impact-effort --create
 ft possible run --seed <seed-id> --repos <repo-a> <repo-b> <repo-c> --frame impact-effort --nodes 7 --model opus --effort medium
-ft possible grid latest
+ft possible grid latest          # latest run or batch
+ft possible grid latest-batch    # latest multi-repo batch
 ft possible dots latest
 ft possible prompt <node-id>
 \`\`\`
@@ -72,6 +73,8 @@ ft possible run --seed <seed-id> --repos <repo-a> <repo-b> --nodes 7 --model opu
 ft possible jobs
 ft possible job <job-id> --log
 \`\`\`
+
+LLM-backed commands default to the user's logged-in Claude Code/Codex CLI account. Only use API/provider billing env vars when the user explicitly sets \`FT_ENGINE_AUTH_MODE=api\`.
 
 For nightly roadmap generation on macOS:
 
@@ -89,7 +92,8 @@ If the user says "debate", use the existing \`ft possible\` pipeline as generate
 \`\`\`bash
 ft paths --json                # Canonical bookmarks, library, commands paths
 ft status --json               # Bookmark/classification status plus paths
-ft current --json              # Active Field Theory document attached to the Mac app terminal
+ft current --json              # Active Field Theory document metadata without the full body
+ft current --content-only      # Active document body when the user/model actually needs it
 ft state --json                # Repo workflow state: root, workers, PRs, cleanup, next step
 ft recent --json               # Current repo last-modified file and recent files for agent references
 
@@ -104,7 +108,8 @@ ft show <id>                   # Full detail for one bookmark
 ft seeds search <query> --create
 ft repos add <path>
 ft possible run --seed <id> --repos <paths...>
-ft possible grid latest
+ft possible grid latest          # latest run or batch
+ft possible grid latest-batch    # latest multi-repo batch
 ft possible dots latest
 ft possible prompt <node-id>
 ft possible nightly install --time 02:00 --defaults
